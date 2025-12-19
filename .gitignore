@@ -75,8 +75,11 @@ venv.bak/
 # *.onnx
 
 # Large data files (uncomment as needed)
-# *.npz
-# *.npy
+*.npz
+*.npy
+
+# Materials folder (contains large model and dataset files)
+Materials/
 
 # OS generated files
 .DS_Store
