@@ -2,9 +2,8 @@ import cv2
 import numpy as np
 import os
 import time
-import numba
 
-@numba.njit(parallel=True)
+
 def get_contrasts_from_dir(image_directory, mask_directory, flatfield_path):
     full_colors = []
     full_contrasts = []

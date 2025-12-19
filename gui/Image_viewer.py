@@ -6,7 +6,7 @@ from PyQt5.QtGui import QPixmap, QImage, QPainter
 import numpy as np
 
 # Import vignette removal function and GMM functions
-from zpreprocessor_functions import remove_vignette
+from scripts.preprocessor_functions import remove_vignette
 
 class ImageViewer(QLabel):
     def __init__(self):

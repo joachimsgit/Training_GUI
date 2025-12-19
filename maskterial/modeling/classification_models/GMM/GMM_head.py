@@ -506,11 +506,11 @@ class GMM_head(BaseClassificationHead):
         **kwargs,
     ) -> "GMM_head":
 
-        model_path = os.path.join(path, "contrast_dict.json")
+        model_path = os.path.join(path, "GMM_parameters.json")
 
         assert os.path.exists(
             model_path
-        ), f"contrast_dict.json not found at {model_path}"
+        ), f"GMM_parameters.json not found at {model_path}"
 
         with open(model_path, "r") as f:
             contrast_dict = json.load(f)

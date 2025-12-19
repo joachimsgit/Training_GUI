@@ -51,7 +51,7 @@ class MainWindow(QMainWindow):
         header_layout = QHBoxLayout()
         
         # Application title
-        title_label = QLabel("🧬 GMM Training GUI - Material Analysis")
+        title_label = QLabel("Training GUI")
         title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #2c3e50; margin: 5px;")
         header_layout.addWidget(title_label)
         
@@ -133,7 +133,9 @@ class MainWindow(QMainWindow):
         self.btn_toggle_plots.setCheckable(True)
         self.btn_class_annotator = QPushButton("Annotate Classes")
         self.btn_train_amm = QPushButton("Train AMM Model")
-        self.btn_train_m2f = QPushButton("Train M2F Model")
+        self.btn_train_gmm = QPushButton("Train GMM Model")
+        self.btn_train_m2f = QPushButton("Train M2F Model (WIP)")
+        self.btn_train_m2f.setToolTip("Work in Progress - Not yet available")
         
         # Initially disable navigation buttons
         self.btn_previous.setEnabled(False)
@@ -143,6 +145,7 @@ class MainWindow(QMainWindow):
         self.btn_toggle_plots.setEnabled(False)
         self.btn_class_annotator.setEnabled(False)
         self.btn_train_amm.setEnabled(False)
+        self.btn_train_gmm.setEnabled(False)
         self.btn_train_m2f.setEnabled(False)
         
         # Connect button signals
@@ -156,6 +159,7 @@ class MainWindow(QMainWindow):
         self.btn_toggle_plots.clicked.connect(self.toggle_plot_mode)
         self.btn_class_annotator.clicked.connect(self.open_class_annotator)
         self.btn_train_amm.clicked.connect(self.open_amm_training)
+        self.btn_train_gmm.clicked.connect(self.open_gmm_training)
         self.btn_train_m2f.clicked.connect(self.open_m2f_training)
         
         # Add buttons to layout
@@ -169,6 +173,7 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.btn_toggle_plots)
         controls_layout.addWidget(self.btn_class_annotator)
         controls_layout.addWidget(self.btn_train_amm)
+        controls_layout.addWidget(self.btn_train_gmm)
         controls_layout.addWidget(self.btn_train_m2f)
         
         # Add status label
@@ -268,7 +273,9 @@ class MainWindow(QMainWindow):
                 self.btn_toggle_plots.setEnabled(True)
                 self.btn_class_annotator.setEnabled(True)
                 self.btn_train_amm.setEnabled(True)
-                self.btn_train_m2f.setEnabled(True)
+                self.btn_train_gmm.setEnabled(True)
+                # M2F training is still work in progress - keep disabled
+                # self.btn_train_m2f.setEnabled(True)
                 self.status_label.setText(f"Loaded {len(self.image_files)} images")
             
             # Build cumulative data from individual contrast files
@@ -996,6 +1003,39 @@ class MainWindow(QMainWindow):
             dialog.exec_()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open AMM training dashboard: {e}")
+    
+    def open_gmm_training(self):
+        """Open the GMM training dialog"""
+        # Get project folder from current image folder
+        if not self.image_folder:
+            QMessageBox.warning(self, "No Folder Selected", 
+                              "Please select a project folder first.")
+            return
+        
+        # Get the material folder (parent of image folder)
+        # e.g., if image_folder is Materials/Graphene/images, project_folder is Materials/Graphene
+        project_folder = os.path.dirname(self.image_folder)
+        
+        # Check if instance masks exist
+        masks_dir = os.path.join(project_folder, "masks")
+        if not os.path.exists(masks_dir):
+            QMessageBox.warning(self, "Warning", 
+                              "No instance masks found. Please create instance masks first.")
+            return
+            
+        # Check if there are any mask files
+        mask_files = [f for f in os.listdir(masks_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        if not mask_files:
+            QMessageBox.warning(self, "Warning", 
+                              "No mask files found. Please create instance masks first.")
+            return
+            
+        try:
+            from gui.gmm_training_dialog import GMMTrainingDialog
+            dialog = GMMTrainingDialog(self, project_folder)
+            dialog.exec_()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open Training dashboard: {e}")
     
     def open_m2f_training(self):
         """Open the M2F training dialog"""

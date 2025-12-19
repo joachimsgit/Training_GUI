@@ -3,10 +3,11 @@ import sys
 import numpy as np
 import torch
 import torch.nn as nn
+import cv2
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                              QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, 
                              QGroupBox, QGridLayout, QFileDialog, QTextEdit, 
-                             QProgressBar, QMessageBox, QCheckBox)
+                             QProgressBar, QMessageBox, QCheckBox, QComboBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from gui.help_dialog import show_help_dialog
 
@@ -18,12 +19,13 @@ class AMMTrainingThread(QThread):
     training_complete = pyqtSignal(bool)
     plot_distribution = pyqtSignal(object, object, object, object)  # model, dataloader, loc, cov
     
-    def __init__(self, train_image_dir, train_annotation_path, save_dir, params):
+    def __init__(self, train_image_dir, train_annotation_path, save_dir, params, flatfield_path=None):
         super().__init__()
         self.train_image_dir = train_image_dir
         self.train_annotation_path = train_annotation_path
         self.save_dir = save_dir
         self.params = params
+        self.flatfield_path = flatfield_path
         self.should_stop = False
         
     def run(self):
@@ -39,6 +41,13 @@ class AMMTrainingThread(QThread):
             from maskterial.modeling.common.fcresnet import FCResNet
             from maskterial.utils.data_loader import ContrastDataloader
             
+            # Apply flatfield correction if enabled
+            train_image_dir = self.train_image_dir
+            if self.flatfield_path is not None:
+                self.log_message.emit("Applying flatfield correction to training images...")
+                train_image_dir = self.apply_flatfield_correction()
+                self.progress_update.emit(5)
+            
             self.progress_update.emit(10)
             self.log_message.emit("Loading data with ContrastDataloader...")
             
@@ -48,7 +57,7 @@ class AMMTrainingThread(QThread):
             
             # Create dataloader exactly like notebook
             dataloader = ContrastDataloader(
-                train_image_dir=self.train_image_dir,
+                train_image_dir=train_image_dir,
                 train_annotation_path=self.train_annotation_path,
                 test_image_dir=None,
                 test_annotation_path=None,
@@ -256,6 +265,83 @@ class AMMTrainingThread(QThread):
             
             return loc, cov
     
+    def remove_vignette(self, image: np.ndarray, flatfield: np.ndarray, 
+                       max_background_value: int = 241) -> np.ndarray:
+        """
+        Removes the vignette from the image using flatfield correction
+        
+        Args:
+            image: The image with vignette (NxMx3 array)
+            flatfield: The flatfield in RGB (NxMx3 array)
+            max_background_value: The maximum value of the background
+            
+        Returns:
+            The image without vignette
+        """
+        image_no_vignette = image / flatfield * cv2.mean(flatfield)[:-1]
+        image_no_vignette[image_no_vignette > max_background_value] = max_background_value
+        return np.asarray(image_no_vignette, dtype=np.uint8)
+    
+    def apply_flatfield_correction(self) -> str:
+        """
+        Apply flatfield correction to all images in the training directory
+        Creates a temporary directory with corrected images
+        
+        Returns:
+            Path to the directory containing corrected images
+        """
+        import tempfile
+        import shutil
+        
+        # Load flatfield image
+        flatfield = cv2.imread(self.flatfield_path)
+        if flatfield is None:
+            raise ValueError(f"Could not load flatfield image from {self.flatfield_path}")
+        
+        self.log_message.emit(f"Flatfield image loaded: {os.path.basename(self.flatfield_path)}")
+        
+        # Create temporary directory for corrected images
+        temp_dir = tempfile.mkdtemp(prefix="amm_flatfield_corrected_")
+        self.log_message.emit(f"Creating corrected images in: {temp_dir}")
+        
+        # Get list of images
+        image_files = [f for f in os.listdir(self.train_image_dir) 
+                      if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'))]
+        
+        total_images = len(image_files)
+        self.log_message.emit(f"Processing {total_images} images with flatfield correction...")
+        
+        for idx, image_file in enumerate(image_files):
+            image_path = os.path.join(self.train_image_dir, image_file)
+            image = cv2.imread(image_path)
+            
+            if image is None:
+                self.log_message.emit(f"Warning: Could not load {image_file}, skipping...")
+                continue
+            
+            # Check dimension compatibility
+            if image.shape != flatfield.shape:
+                self.log_message.emit(
+                    f"Warning: Image {image_file} has shape {image.shape} "
+                    f"but flatfield has shape {flatfield.shape}. Skipping correction for this image."
+                )
+                # Copy original image if dimensions don't match
+                shutil.copy(image_path, os.path.join(temp_dir, image_file))
+                continue
+            
+            # Apply flatfield correction
+            corrected_image = self.remove_vignette(image, flatfield)
+            
+            # Save corrected image
+            output_path = os.path.join(temp_dir, image_file)
+            cv2.imwrite(output_path, corrected_image)
+            
+            if (idx + 1) % 10 == 0 or idx == total_images - 1:
+                self.log_message.emit(f"Corrected {idx + 1}/{total_images} images...")
+        
+        self.log_message.emit(f"Flatfield correction complete. Using corrected images from: {temp_dir}")
+        return temp_dir
+    
     # Remove plot_distribution method from thread class - moved to main dialog
 
 
@@ -278,6 +364,14 @@ class AMMTrainingDialog(QDialog):
                 self.train_masks_edit.setText(semantic_masks_dir)
             # Set save directory to dedicated AMM folder
             self.save_dir_edit.setText(amm_save_dir)
+            
+            # Auto-populate flatfield path if it exists
+            flatfield_path = os.path.join(self.project_folder, "flatfield.png")
+            if os.path.exists(flatfield_path):
+                self.flatfield_edit.setText(flatfield_path)
+                self.use_flatfield_combo.setCurrentText("Enabled")
+                self.flatfield_edit.setEnabled(True)
+                self.btn_browse_flatfield.setEnabled(True)
         
     def init_ui(self):
         """Initialize the AMM training UI based on notebook parameters"""
@@ -348,6 +442,29 @@ class AMMTrainingDialog(QDialog):
         
         data_group.setLayout(data_layout)
         layout.addWidget(data_group)
+        
+        # Flatfield Correction Configuration
+        flatfield_group = QGroupBox("Flatfield Correction")
+        flatfield_layout = QGridLayout()
+        
+        flatfield_layout.addWidget(QLabel("Flatfield:"), 0, 0)
+        self.use_flatfield_combo = QComboBox()
+        self.use_flatfield_combo.addItems(["Disabled", "Enabled"])
+        self.use_flatfield_combo.currentTextChanged.connect(self.on_flatfield_toggle)
+        flatfield_layout.addWidget(self.use_flatfield_combo, 0, 1)
+        
+        flatfield_layout.addWidget(QLabel("Flatfield Image:"), 1, 0)
+        self.flatfield_edit = QLineEdit()
+        self.flatfield_edit.setPlaceholderText("Path to flatfield image for vignette correction")
+        self.flatfield_edit.setEnabled(False)
+        flatfield_layout.addWidget(self.flatfield_edit, 1, 1)
+        self.btn_browse_flatfield = QPushButton("Browse")
+        self.btn_browse_flatfield.clicked.connect(self.browse_flatfield_image)
+        self.btn_browse_flatfield.setEnabled(False)
+        flatfield_layout.addWidget(self.btn_browse_flatfield, 1, 2)
+        
+        flatfield_group.setLayout(flatfield_layout)
+        layout.addWidget(flatfield_group)
         
         # Training Parameters (from notebook)
         train_group = QGroupBox("Training Parameters")
@@ -535,6 +652,21 @@ class AMMTrainingDialog(QDialog):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Save Directory")
         if dir_path:
             self.save_dir_edit.setText(dir_path)
+    
+    def on_flatfield_toggle(self):
+        """Handle enable/disable of flatfield correction"""
+        enabled = self.use_flatfield_combo.currentText() == "Enabled"
+        self.flatfield_edit.setEnabled(enabled)
+        self.btn_browse_flatfield.setEnabled(enabled)
+    
+    def browse_flatfield_image(self):
+        """Browse for flatfield image"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Flatfield Image", "", 
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.tiff *.tif)"
+        )
+        if file_path:
+            self.flatfield_edit.setText(file_path)
         
     def start_training(self):
         """Start AMM training with current parameters"""
@@ -554,6 +686,18 @@ class AMMTrainingDialog(QDialog):
         if not save_dir:
             QMessageBox.warning(self, "Error", "Please specify a save directory")
             return
+        
+        # Validate flatfield if enabled
+        flatfield_path = None
+        if self.use_flatfield_combo.currentText() == "Enabled":
+            flatfield_path = self.flatfield_edit.text().strip()
+            if not flatfield_path or not os.path.exists(flatfield_path):
+                QMessageBox.warning(
+                    self, "Error", 
+                    "Flatfield correction is enabled but no valid flatfield image has been selected. "
+                    "Please select a flatfield image or disable flatfield correction."
+                )
+                return
         
         # Collect all parameters exactly like notebook
         params = {
@@ -586,9 +730,9 @@ class AMMTrainingDialog(QDialog):
             'show_distribution_plot': self.show_distribution_cb.isChecked()
         }
         
-        # Start training thread
+        # Start training thread with flatfield path
         self.training_thread = AMMTrainingThread(
-            train_image_dir, train_masks_dir, save_dir, params
+            train_image_dir, train_masks_dir, save_dir, params, flatfield_path
         )
         self.training_thread.progress_update.connect(self.update_progress)
         self.training_thread.log_message.connect(self.log_message)

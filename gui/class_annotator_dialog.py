@@ -7,11 +7,50 @@ from matplotlib.figure import Figure
 from matplotlib.widgets import LassoSelector
 from matplotlib.path import Path
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
-                             QLabel, QSpinBox, QDoubleSpinBox, QMessageBox, QProgressBar)
-from PyQt5.QtCore import Qt, QEvent, QTimer
+                             QLabel, QSpinBox, QDoubleSpinBox, QMessageBox, QProgressBar,
+                             QProgressDialog, QApplication)
+from PyQt5.QtCore import Qt, QEvent, QTimer, QThread, pyqtSignal
 from gui.help_dialog import show_help_dialog
 from scipy.ndimage import gaussian_filter
 import cv2
+
+
+class ContrastLoaderThread(QThread):
+    """Thread for loading contrast data without blocking the UI"""
+    progress_update = pyqtSignal(str)
+    finished = pyqtSignal(object, object)  # (instance_contrasts, instance_classifiers)
+    error = pyqtSignal(str)
+    
+    def __init__(self, image_directory, mask_directory, flatfield_path, use_flatfield):
+        super().__init__()
+        self.image_directory = image_directory
+        self.mask_directory = mask_directory
+        self.flatfield_path = flatfield_path
+        self.use_flatfield = use_flatfield
+        
+    def run(self):
+        try:
+            self.progress_update.emit("Loading contrast data from images...")
+            
+            # Add scripts to path
+            scripts_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts")
+            if scripts_path not in sys.path:
+                sys.path.append(scripts_path)
+            
+            from scripts.preprocessor_functions import get_instance_contrasts_from_dir
+            
+            instance_contrasts, instance_classifiers = get_instance_contrasts_from_dir(
+                self.image_directory, 
+                self.mask_directory,
+                self.flatfield_path if self.use_flatfield else None,
+                self.use_flatfield,
+                min_instance_size=10
+            )
+            
+            self.finished.emit(instance_contrasts, instance_classifiers)
+            
+        except Exception as e:
+            self.error.emit(str(e))
 
 class ClassAnnotatorDialog(QDialog):
     def __init__(self, parent=None, project_folder=None):
@@ -21,6 +60,8 @@ class ClassAnnotatorDialog(QDialog):
         self.current_class = 1
         self.class_assignments = None
         self.selected_points = []
+        self.loader_thread = None
+        self.progress_dialog = None
         
         # Store axis limits for each color
         self.r_limits = [-1.0, 0.5]
@@ -251,70 +292,91 @@ class ClassAnnotatorDialog(QDialog):
             self.status_label.setText("No project folder specified")
             return
             
-        try:
-            # Import the contrast extraction function
-            sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-            from zpreprocessor_functions import get_instance_contrasts_from_dir, remove_vignette
-            
-            # Get paths
-            image_directory = os.path.join(self.project_folder, "images")
-            mask_directory = os.path.join(self.project_folder, "masks")
-            flatfield_path = os.path.join(self.project_folder, "flatfield.png")
-            
-            # Check if required directories exist
-            if not os.path.exists(image_directory):
-                self.status_label.setText("Images directory not found")
-                return
-            if not os.path.exists(mask_directory):
-                self.status_label.setText("Masks directory not found")
-                return
-                
-            # Load contrast data
-            use_flatfield = os.path.exists(flatfield_path)
-            instance_contrasts, instance_classifiers = get_instance_contrasts_from_dir(
-                image_directory, 
-                mask_directory,
-                flatfield_path if use_flatfield else None,
-                use_flatfield,
-                min_instance_size=10
+        # Get paths
+        image_directory = os.path.join(self.project_folder, "images")
+        mask_directory = os.path.join(self.project_folder, "masks")
+        flatfield_path = os.path.join(self.project_folder, "flatfield.png")
+        
+        # Check if required directories exist
+        if not os.path.exists(image_directory):
+            self.status_label.setText("Images directory not found")
+            return
+        if not os.path.exists(mask_directory):
+            self.status_label.setText("Masks directory not found")
+            return
+        
+        # Show progress dialog
+        self.progress_dialog = QProgressDialog("Extracting contrast data...", None, 0, 0, self)
+        self.progress_dialog.setWindowTitle("Loading")
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.show()
+        QApplication.processEvents()
+        
+        # Start loader thread
+        use_flatfield = os.path.exists(flatfield_path)
+        self.loader_thread = ContrastLoaderThread(
+            image_directory, mask_directory, flatfield_path, use_flatfield
+        )
+        self.loader_thread.progress_update.connect(self.on_loading_progress)
+        self.loader_thread.finished.connect(self.on_loading_finished)
+        self.loader_thread.error.connect(self.on_loading_error)
+        self.loader_thread.start()
+    
+    def on_loading_progress(self, message):
+        """Update progress dialog with message"""
+        if self.progress_dialog:
+            self.progress_dialog.setLabelText(message)
+            QApplication.processEvents()
+    
+    def on_loading_finished(self, instance_contrasts, instance_classifiers):
+        """Handle completed contrast data loading"""
+        if self.progress_dialog:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+        
+        if instance_contrasts and len(instance_contrasts) > 0:
+            # Apply high standard deviation filter using UI threshold
+            threshold = self.stddev_threshold_input.value()
+            filtered_contrasts, filtered_classifiers = self.apply_high_stddev_filter(
+                instance_contrasts, instance_classifiers, threshold=threshold
             )
             
-            if instance_contrasts and len(instance_contrasts) > 0:
-                # Apply high standard deviation filter using UI threshold
-                threshold = self.stddev_threshold_input.value()
-                filtered_contrasts, filtered_classifiers = self.apply_high_stddev_filter(
-                    instance_contrasts, instance_classifiers, threshold=threshold
-                )
-                
-                # Convert list of arrays to single array with mean contrast per instance
-                # Note: contrast data is in BGR format, convert to RGB for display
-                contrast_bgr = np.array([np.mean(instance_contrast, axis=0) 
-                                       for instance_contrast in filtered_contrasts])
-                # Convert BGR to RGB: [B, G, R] -> [R, G, B]
-                self.contrast_data = contrast_bgr[:, [2, 1, 0]]  # Swap B and R channels
-                self.instance_classifiers = filtered_classifiers
-                
-                # Initialize class assignments (all start as unassigned = -1)
-                self.class_assignments = np.full(len(self.contrast_data), -1, dtype=int)
-                
-                # Update UI with filtering info
-                original_count = len(instance_contrasts)
-                filtered_count = len(filtered_contrasts)
-                filtered_out = original_count - filtered_count
-                
-                self.progress_label.setText(f"Loaded {filtered_count} instances ({filtered_out} filtered)")
-                self.btn_save.setEnabled(True)
-                
-                # Create plots
-                self.update_plots()
-                
-                self.status_label.setText(f"Ready - {filtered_count} instances loaded, {filtered_out} high-stddev filtered")
-            else:
-                self.status_label.setText("No contrast data found")
-                
-        except Exception as e:
-            self.status_label.setText(f"Error loading data: {e}")
-            QMessageBox.warning(self, "Error", f"Failed to load contrast data: {e}")
+            # Convert list of arrays to single array with mean contrast per instance
+            # Note: contrast data is in BGR format, convert to RGB for display
+            contrast_bgr = np.array([np.mean(instance_contrast, axis=0) 
+                                   for instance_contrast in filtered_contrasts])
+            # Convert BGR to RGB: [B, G, R] -> [R, G, B]
+            self.contrast_data = contrast_bgr[:, [2, 1, 0]]  # Swap B and R channels
+            self.instance_classifiers = filtered_classifiers
+            
+            # Initialize class assignments (all start as unassigned = -1)
+            self.class_assignments = np.full(len(self.contrast_data), -1, dtype=int)
+            
+            # Update UI with filtering info
+            original_count = len(instance_contrasts)
+            filtered_count = len(filtered_contrasts)
+            filtered_out = original_count - filtered_count
+            
+            self.progress_label.setText(f"Loaded {filtered_count} instances ({filtered_out} filtered)")
+            self.btn_save.setEnabled(True)
+            
+            # Create plots
+            self.update_plots()
+            
+            self.status_label.setText(f"Ready - {filtered_count} instances loaded, {filtered_out} high-stddev filtered")
+        else:
+            self.status_label.setText("No contrast data found")
+    
+    def on_loading_error(self, error_msg):
+        """Handle loading error"""
+        if self.progress_dialog:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+        
+        self.status_label.setText(f"Error loading data: {error_msg}")
+        QMessageBox.warning(self, "Error", f"Failed to load contrast data: {error_msg}")
     
     def apply_high_stddev_filter(self, instance_contrasts, instance_classifiers, threshold=0.2):
         """

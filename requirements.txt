@@ -1,0 +1,30 @@
+# Core GUI
+PyQt5>=5.15.0
+
+# Scientific computing
+numpy>=1.21.0
+scipy>=1.7.0
+matplotlib>=3.5.0
+
+# Image processing
+opencv-python>=4.5.0
+Pillow>=9.0.0
+
+# Machine Learning
+scikit-learn>=1.0.0
+scikit-image>=0.19.0
+
+# Deep Learning (PyTorch) - install separately based on your CUDA version
+# See: https://pytorch.org/get-started/locally/
+torch>=1.10.0
+torchvision>=0.11.0
+
+# Detectron2 - install separately after PyTorch
+# See: https://detectron2.readthedocs.io/en/latest/tutorials/install.html
+# detectron2
+
+# COCO tools
+pycocotools>=2.0.0
+
+# Optional: for experiment tracking
+# wandb

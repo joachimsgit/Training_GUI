@@ -4,7 +4,7 @@ Minimal Inference GUI for MaskTerial
 Based on demo_inference.ipynb workflow
 
 This is a simplified standalone GUI for loading models and running inference
-on individual images, focused on core functionality without complex features.
+on individual images.
 """
 
 import os
@@ -225,6 +225,10 @@ class MinimalInferenceGUI(QMainWindow):
         self.cls_model_path: Optional[str] = None
         self.pp_model_path: Optional[str] = None
         
+        # Flatfield correction
+        self.flatfield_image: Optional[np.ndarray] = None
+        self.flatfield_path: Optional[str] = None
+        
         # Threads
         self.model_load_thread: Optional[ModelLoadThread] = None
         self.inference_thread: Optional[InferenceThread] = None
@@ -341,6 +345,31 @@ class MinimalInferenceGUI(QMainWindow):
         
         left_layout.addWidget(params_group)
         
+        # Flatfield correction group
+        flatfield_group = QGroupBox("Flatfield Correction")
+        flatfield_layout = QGridLayout(flatfield_group)
+        
+        # Enable flatfield checkbox
+        self.use_flatfield_checkbox = QComboBox()
+        self.use_flatfield_checkbox.addItems(["Disabled", "Enabled"])
+        self.use_flatfield_checkbox.currentTextChanged.connect(self.on_flatfield_toggle)
+        flatfield_layout.addWidget(QLabel("Flatfield:"), 0, 0)
+        flatfield_layout.addWidget(self.use_flatfield_checkbox, 0, 1)
+        
+        # Browse flatfield button
+        self.flatfield_btn = QPushButton("Browse Flatfield Image")
+        self.flatfield_btn.clicked.connect(self.select_flatfield_image)
+        self.flatfield_btn.setEnabled(False)
+        flatfield_layout.addWidget(self.flatfield_btn, 1, 0, 1, 2)
+        
+        # Flatfield path label
+        self.flatfield_path_label = QLabel("No flatfield image selected")
+        self.flatfield_path_label.setWordWrap(True)
+        self.flatfield_path_label.setStyleSheet("color: gray; font-size: 10px;")
+        flatfield_layout.addWidget(self.flatfield_path_label, 2, 0, 1, 2)
+        
+        left_layout.addWidget(flatfield_group)
+        
         # Action buttons
         self.load_models_btn = QPushButton("Load Models")
         self.load_models_btn.clicked.connect(self.load_models)
@@ -399,11 +428,69 @@ class MinimalInferenceGUI(QMainWindow):
         # Initial status
         self.log_message("Ready! GUI loaded quickly using smart preloading.")
         self.log_message("Tip: Start selecting models - heavy libraries will preload in background!")
-        self.log_message("Note: AMM models need model.pth, GMM models need contrast_dict.json")
+        self.log_message("Note: AMM models need model.pth, GMM models need GMM_parameters.json")
         
         # Update button states based on initial selections
         self.on_model_type_changed()
         
+    def on_flatfield_toggle(self):
+        """Handle enable/disable of flatfield correction"""
+        enabled = self.use_flatfield_checkbox.currentText() == "Enabled"
+        self.flatfield_btn.setEnabled(enabled)
+        
+        if not enabled:
+            self.flatfield_path_label.setText("Flatfield correction disabled")
+            self.flatfield_path_label.setStyleSheet("color: gray; font-size: 10px;")
+        else:
+            if self.flatfield_path:
+                self.flatfield_path_label.setText(f"✓ {self.flatfield_path}")
+                self.flatfield_path_label.setStyleSheet("color: green; font-size: 10px;")
+            else:
+                self.flatfield_path_label.setText("No flatfield image selected")
+                self.flatfield_path_label.setStyleSheet("color: gray; font-size: 10px;")
+    
+    def select_flatfield_image(self):
+        """Select a flatfield image for vignette correction"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Flatfield Image", "", 
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.tiff *.tif)"
+        )
+        
+        if file_path:
+            try:
+                # Load flatfield image
+                flatfield = cv2.imread(file_path)
+                if flatfield is None:
+                    raise ValueError("Could not load the selected flatfield image")
+                
+                self.flatfield_image = flatfield
+                self.flatfield_path = file_path
+                
+                self.flatfield_path_label.setText(f"✓ {file_path}")
+                self.flatfield_path_label.setStyleSheet("color: green; font-size: 10px;")
+                self.log_message(f"Flatfield image loaded: {os.path.basename(file_path)}")
+                
+            except Exception as e:
+                self.log_message(f"Failed to load flatfield image: {e}")
+                QMessageBox.critical(self, "Flatfield Loading Error", str(e))
+    
+    def remove_vignette(self, image: np.ndarray, flatfield: np.ndarray, 
+                       max_background_value: int = 241) -> np.ndarray:
+        """
+        Removes the vignette from the image using flatfield correction
+        
+        Args:
+            image: The image with vignette (NxMx3 array)
+            flatfield: The flatfield in RGB (NxMx3 array)
+            max_background_value: The maximum value of the background
+            
+        Returns:
+            The image without vignette
+        """
+        image_no_vignette = image / flatfield * cv2.mean(flatfield)[:-1]
+        image_no_vignette[image_no_vignette > max_background_value] = max_background_value
+        return np.asarray(image_no_vignette, dtype=np.uint8)
+    
     def start_background_preloading(self):
         """Start preloading heavy libraries in background when user starts interacting"""
         if not self.preloading_started and not self.libraries_preloaded:
@@ -478,18 +565,17 @@ class MinimalInferenceGUI(QMainWindow):
             cls_model_type = self.cls_model_combo.currentText()
             
             # Check for required files based on model type
-            meta_file = os.path.join(directory, "meta_data.json")
-            loc_file = os.path.join(directory, "loc.npy")
-            cov_file = os.path.join(directory, "cov.npy")
-            
             if cls_model_type == "GMM":
-                # GMM requires contrast_dict.json instead of model.pth
-                model_file = os.path.join(directory, "contrast_dict.json")
-                required_files = [meta_file, loc_file, cov_file, model_file]
+                # GMM only requires GMM_parameters.json
+                model_file = os.path.join(directory, "GMM_parameters.json")
+                required_files = [model_file]
                 model_type_name = "GMM"
-                expected_files = "• meta_data.json\n• loc.npy\n• cov.npy\n• contrast_dict.json"
+                expected_files = "• GMM_parameters.json"
             else:  # AMM
-                # AMM requires model.pth
+                # AMM requires model.pth and associated files
+                meta_file = os.path.join(directory, "meta_data.json")
+                loc_file = os.path.join(directory, "loc.npy")
+                cov_file = os.path.join(directory, "cov.npy")
                 model_file = os.path.join(directory, "model.pth")
                 required_files = [meta_file, loc_file, cov_file, model_file]
                 model_type_name = "AMM"
@@ -518,18 +604,20 @@ class MinimalInferenceGUI(QMainWindow):
         directory = self.cls_model_path
         
         # Check for required files based on current model type
-        meta_file = os.path.join(directory, "meta_data.json")
-        loc_file = os.path.join(directory, "loc.npy")
-        cov_file = os.path.join(directory, "cov.npy")
-        
         if cls_model_type == "GMM":
-            model_file = os.path.join(directory, "contrast_dict.json")
+            # GMM only requires GMM_parameters.json
+            model_file = os.path.join(directory, "GMM_parameters.json")
+            required_files = [model_file]
             model_type_name = "GMM"
         else:  # AMM
+            # AMM requires model.pth and associated files
+            meta_file = os.path.join(directory, "meta_data.json")
+            loc_file = os.path.join(directory, "loc.npy")
+            cov_file = os.path.join(directory, "cov.npy")
             model_file = os.path.join(directory, "model.pth")
+            required_files = [meta_file, loc_file, cov_file, model_file]
             model_type_name = "AMM"
         
-        required_files = [meta_file, loc_file, cov_file, model_file]
         missing_files = [os.path.basename(f) for f in required_files if not os.path.exists(f)]
         
         if missing_files:
@@ -773,6 +861,32 @@ class MinimalInferenceGUI(QMainWindow):
         """Run inference on the loaded image"""
         if self.predictor is None or self.current_image is None:
             return
+        
+        # Prepare the image for inference (apply flatfield correction if enabled)
+        inference_image = self.current_image.copy()
+        
+        if self.use_flatfield_checkbox.currentText() == "Enabled":
+            if self.flatfield_image is None:
+                QMessageBox.warning(
+                    self, "Flatfield Not Selected", 
+                    "Flatfield correction is enabled but no flatfield image has been selected. "
+                    "Please select a flatfield image or disable flatfield correction."
+                )
+                return
+            
+            # Check if flatfield and image have compatible dimensions
+            if self.flatfield_image.shape != inference_image.shape:
+                QMessageBox.warning(
+                    self, "Dimension Mismatch", 
+                    f"Flatfield image dimensions {self.flatfield_image.shape} do not match "
+                    f"input image dimensions {inference_image.shape}. "
+                    "Please use a flatfield image with matching dimensions."
+                )
+                return
+            
+            self.log_message("Applying flatfield correction...")
+            inference_image = self.remove_vignette(inference_image, self.flatfield_image)
+            self.log_message("Flatfield correction applied.")
             
         # Update predictor parameters
         self.predictor.score_threshold = self.score_threshold_spin.value()
@@ -784,8 +898,8 @@ class MinimalInferenceGUI(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
         
-        # Start inference thread
-        self.inference_thread = InferenceThread(self.predictor, self.current_image)
+        # Start inference thread with the (possibly corrected) image
+        self.inference_thread = InferenceThread(self.predictor, inference_image)
         self.inference_thread.finished.connect(self.on_inference_finished)
         self.inference_thread.error.connect(self.on_inference_error)
         self.inference_thread.progress.connect(self.log_message)
