@@ -100,3 +100,8 @@ Thumbs.db
 
 #chaches
 *.pyc
+
+#image files
+*.jpg
+*.jpeg
+*.png
