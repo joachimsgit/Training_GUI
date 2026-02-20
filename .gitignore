@@ -97,3 +97,6 @@ Thumbs.db
 
 # Log files
 *.log
+
+#chaches
+*.pyc

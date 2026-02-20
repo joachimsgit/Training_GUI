@@ -396,55 +396,82 @@ class GMMTrainingDialog(QDialog):
         crop_group = QGroupBox("Data Cropping (Optional)")
         crop_layout = QGridLayout()
         
-        crop_layout.addWidget(QLabel("Lower Bounds (B,G,R):"), 0, 0)
+        # Auto-crop controls
+        auto_crop_layout = QHBoxLayout()
+        self.btn_auto_crop = QPushButton("Auto-Crop")
+        self.btn_auto_crop.setToolTip("Automatically set bounds based on data range ± padding %")
+        self.btn_auto_crop.clicked.connect(self.auto_crop_bounds)
+        self.btn_auto_crop.setStyleSheet("""
+            QPushButton {
+                background-color: #0078D4;
+                color: white;
+                border-radius: 3px;
+                padding: 3px 8px;
+            }
+            QPushButton:hover {
+                background-color: #106EBE;
+            }
+        """)
+        auto_crop_layout.addWidget(self.btn_auto_crop)
+        
+        auto_crop_layout.addWidget(QLabel("Padding %:"))
+        self.auto_crop_padding_spin = QSpinBox()
+        self.auto_crop_padding_spin.setRange(0, 50)
+        self.auto_crop_padding_spin.setValue(5)
+        self.auto_crop_padding_spin.setToolTip("Percentage padding to add beyond min/max values")
+        auto_crop_layout.addWidget(self.auto_crop_padding_spin)
+        auto_crop_layout.addStretch()
+        crop_layout.addLayout(auto_crop_layout, 0, 0, 1, 4)
+        
+        crop_layout.addWidget(QLabel("Lower Bounds (B,G,R):"), 1, 0)
         self.lower_b_spin = QDoubleSpinBox()
-        self.lower_b_spin.setRange(-2.0, 2.0)
+        self.lower_b_spin.setRange(-5.0, 5.0)
         self.lower_b_spin.setValue(-1.0)
         self.lower_b_spin.setSingleStep(0.1)
         self.lower_b_spin.setDecimals(2)
         self.lower_b_spin.valueChanged.connect(self.on_bounds_changed)
-        crop_layout.addWidget(self.lower_b_spin, 0, 1)
+        crop_layout.addWidget(self.lower_b_spin, 1, 1)
         
         self.lower_g_spin = QDoubleSpinBox()
-        self.lower_g_spin.setRange(-2.0, 2.0)
+        self.lower_g_spin.setRange(-5.0, 5.0)
         self.lower_g_spin.setValue(-1.5)
         self.lower_g_spin.setSingleStep(0.1)
         self.lower_g_spin.setDecimals(2)
         self.lower_g_spin.valueChanged.connect(self.on_bounds_changed)
-        crop_layout.addWidget(self.lower_g_spin, 0, 2)
+        crop_layout.addWidget(self.lower_g_spin, 1, 2)
         
         self.lower_r_spin = QDoubleSpinBox()
-        self.lower_r_spin.setRange(-2.0, 3.0)
+        self.lower_r_spin.setRange(-5.0, 5.0)
         self.lower_r_spin.setValue(-1.5)
         self.lower_r_spin.setSingleStep(0.1)
         self.lower_r_spin.setDecimals(2)
         self.lower_r_spin.valueChanged.connect(self.on_bounds_changed)
-        crop_layout.addWidget(self.lower_r_spin, 0, 3)
+        crop_layout.addWidget(self.lower_r_spin, 1, 3)
         
-        crop_layout.addWidget(QLabel("Upper Bounds (B,G,R):"), 1, 0)
+        crop_layout.addWidget(QLabel("Upper Bounds (B,G,R):"), 2, 0)
         self.upper_b_spin = QDoubleSpinBox()
-        self.upper_b_spin.setRange(-2.0, 5.0)
+        self.upper_b_spin.setRange(-5.0, 5.0)
         self.upper_b_spin.setValue(0.5)
         self.upper_b_spin.setSingleStep(0.1)
         self.upper_b_spin.setDecimals(2)
         self.upper_b_spin.valueChanged.connect(self.on_bounds_changed)
-        crop_layout.addWidget(self.upper_b_spin, 1, 1)
+        crop_layout.addWidget(self.upper_b_spin, 2, 1)
         
         self.upper_g_spin = QDoubleSpinBox()
-        self.upper_g_spin.setRange(-2.0, 5.0)
+        self.upper_g_spin.setRange(-5.0, 5.0)
         self.upper_g_spin.setValue(0.5)
         self.upper_g_spin.setSingleStep(0.1)
         self.upper_g_spin.setDecimals(2)
         self.upper_g_spin.valueChanged.connect(self.on_bounds_changed)
-        crop_layout.addWidget(self.upper_g_spin, 1, 2)
+        crop_layout.addWidget(self.upper_g_spin, 2, 2)
         
         self.upper_r_spin = QDoubleSpinBox()
-        self.upper_r_spin.setRange(-2.0, 5.0)
+        self.upper_r_spin.setRange(-5.0, 5.0)
         self.upper_r_spin.setValue(0.5)
         self.upper_r_spin.setSingleStep(0.1)
         self.upper_r_spin.setDecimals(2)
         self.upper_r_spin.valueChanged.connect(self.on_bounds_changed)
-        crop_layout.addWidget(self.upper_r_spin, 1, 3)
+        crop_layout.addWidget(self.upper_r_spin, 2, 3)
         
         crop_group.setLayout(crop_layout)
         left_layout.addWidget(crop_group)
@@ -625,6 +652,57 @@ class GMMTrainingDialog(QDialog):
         """Update plot when channel selection changes"""
         if self.contrast_data is not None:
             self.refresh_plot()
+    
+    def auto_crop_bounds(self):
+        """Automatically set cropping bounds based on min/max RGB contrast values with padding"""
+        if self.contrast_data is None:
+            self.log_text.append("No contrast data loaded - cannot auto-crop")
+            return
+        
+        # Get the padding percentage
+        padding_percent = self.auto_crop_padding_spin.value() / 100.0
+        
+        # Calculate min/max for each channel (B, G, R)
+        min_vals = np.min(self.contrast_data, axis=0)
+        max_vals = np.max(self.contrast_data, axis=0)
+        
+        # Calculate the range for each channel
+        ranges = max_vals - min_vals
+        
+        # Apply padding
+        lower_bounds = min_vals - (ranges * padding_percent)
+        upper_bounds = max_vals + (ranges * padding_percent)
+        
+        # Block signals to prevent multiple plot updates
+        self.lower_b_spin.blockSignals(True)
+        self.lower_g_spin.blockSignals(True)
+        self.lower_r_spin.blockSignals(True)
+        self.upper_b_spin.blockSignals(True)
+        self.upper_g_spin.blockSignals(True)
+        self.upper_r_spin.blockSignals(True)
+        
+        # Set the spinbox values
+        self.lower_b_spin.setValue(round(lower_bounds[0], 2))
+        self.lower_g_spin.setValue(round(lower_bounds[1], 2))
+        self.lower_r_spin.setValue(round(lower_bounds[2], 2))
+        self.upper_b_spin.setValue(round(upper_bounds[0], 2))
+        self.upper_g_spin.setValue(round(upper_bounds[1], 2))
+        self.upper_r_spin.setValue(round(upper_bounds[2], 2))
+        
+        # Unblock signals
+        self.lower_b_spin.blockSignals(False)
+        self.lower_g_spin.blockSignals(False)
+        self.lower_r_spin.blockSignals(False)
+        self.upper_b_spin.blockSignals(False)
+        self.upper_g_spin.blockSignals(False)
+        self.upper_r_spin.blockSignals(False)
+        
+        self.log_text.append(f"Auto-cropped bounds with {padding_percent*100:.0f}% padding:")
+        self.log_text.append(f"  Lower: B={lower_bounds[0]:.2f}, G={lower_bounds[1]:.2f}, R={lower_bounds[2]:.2f}")
+        self.log_text.append(f"  Upper: B={upper_bounds[0]:.2f}, G={upper_bounds[1]:.2f}, R={upper_bounds[2]:.2f}")
+        
+        # Update plot with new bounds
+        self.refresh_plot()
     
     def on_canvas_press(self, event):
         """Handle mouse button press on canvas"""
@@ -970,6 +1048,9 @@ class GMMTrainingDialog(QDialog):
         self.contrast_data = contrast_data
         self.log_text.append(f"Loaded {len(self.contrast_data)} contrast datapoints")
         
+        # Auto-crop bounds based on loaded data
+        self.auto_crop_bounds()
+        
         # Update the plot
         self.update_plot()
         
@@ -1016,7 +1097,10 @@ class GMMTrainingDialog(QDialog):
         <h4>Data Cropping</h4>
         <p>Define the contrast value range for visualization and training. The plot updates instantly as you adjust the bounds.</p>
         <ul>
+            <li><b>Auto-Crop:</b> Automatically calculates optimal bounds based on min/max RGB values in your data</li>
+            <li><b>Padding %:</b> Adds extra margin beyond the min/max values (default 5%)</li>
             <li><b>Lower/Upper Bounds:</b> Set the contrast range for each channel (B, G, R)</li>
+            <li>Bounds are automatically set when data is loaded</li>
             <li>Adjust these values while viewing the heatmap to focus on specific contrast ranges</li>
             <li>Data outside these bounds will be excluded from training</li>
         </ul>

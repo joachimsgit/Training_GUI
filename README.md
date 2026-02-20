@@ -159,18 +159,3 @@ sudo apt-get install python3-pyqt5
 ### Detectron2 installation issues
 - Ensure your PyTorch version matches the detectron2 requirements
 - On Windows, consider using WSL2 for easier installation
-
-## License
-
-[Add your license information here]
-
-## Contributing
-
-[Add contribution guidelines here]
-
-## Acknowledgments
-
-This project uses:
-- [Detectron2](https://github.com/facebookresearch/detectron2) for instance segmentation
-- [Mask2Former](https://github.com/facebookresearch/Mask2Former) for semantic segmentation
-- [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) for the GUI framework
