@@ -99,3 +99,4 @@ Thumbs.db
 *.log
 
 #chaches
+*.pyc
